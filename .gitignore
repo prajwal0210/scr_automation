@@ -1,0 +1,32 @@
+# Ignore output & generated files
+output/
+logs/
+ran_already/
+
+# Ignore input/raw data (optional - if sensitive)
+input/
+raw_files/
+reference/
+
+# Ignore environment
+scr_automation_env/
+venv/
+.env
+
+# Ignore Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Ignore system files
+.DS_Store
+Thumbs.db
+
+# Ignore large files (optional)
+*.csv
+*.xlsx
+*.log
+
+# Keep folder structure but ignore files (optional)
+# output/*
+# !output/.gitkeep
