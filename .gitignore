@@ -32,3 +32,22 @@ input/
 # Optional system files
 .DS_Store
 Thumbs.db
+
+# Ignore everything inside but keep folder
+input/*
+!input/.gitkeep
+
+output/*
+!output/.gitkeep
+
+processing/*
+!processing/.gitkeep
+
+ran_already/*
+!ran_already/.gitkeep
+
+raw_files/*
+!raw_files/.gitkeep
+
+support_session_raw/*
+!support_session_raw/.gitkeep
