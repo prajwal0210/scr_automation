@@ -1,39 +1,28 @@
+# ----------------------------
 # Python cache
+# ----------------------------
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Virtual environment
+# ----------------------------
+# Virtual environments
+# ----------------------------
 scr_automation_env/
 .venv/
 venv/
 env/
 
-# Logs
-logs/
-*.log
+# ----------------------------
+# Logs (keep folder, ignore files)
+# ----------------------------
+logs/*
+!logs/.gitkeep
 
-# Output/generated files
-output/
-processing/
-ran_already/
-
-# Raw/input files - do not upload sensitive data
-raw_files/
-support_session_raw/
-input/
-
-# Keep these folders uploaded
-!reference/
-!reference/**
-
-!templates/
-!templates/**
-
-# Optional system files
-.DS_Store
-Thumbs.db
-
-# Ignore everything inside but keep folder
+# ----------------------------
+# Data folders (keep structure only)
+# ----------------------------
 input/*
 !input/.gitkeep
 
@@ -51,3 +40,18 @@ raw_files/*
 
 support_session_raw/*
 !support_session_raw/.gitkeep
+
+# ----------------------------
+# Keep these folders fully
+# ----------------------------
+!reference/
+!reference/**
+
+!templates/
+!templates/**
+
+# ----------------------------
+# OS / system files
+# ----------------------------
+.DS_Store
+Thumbs.db
