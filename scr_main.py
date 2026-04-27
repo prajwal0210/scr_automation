@@ -4,21 +4,23 @@ import shutil
 import tempfile
 import pandas as pd
 from lxml import etree
-from docx import Document
-from docx.shared import Pt
-from docx.oxml.ns import qn
 from copy import deepcopy
+from pathlib import Path
 
 # =========================
 # FILE PATHS
 # =========================
-EXCEL_PATH = r"C:\Users\prajw\OneDrive\Documents\Projects\scr_automation\input\Automation data.xlsx"
+BASE_DIR = Path(r"C:\Users\prajw\OneDrive\Documents\Projects\scr_automation")
 
-TEMPLATE_PATH = r"C:\Users\prajw\OneDrive\Documents\Projects\scr_automation\templates\SCR_TEMPLATE_UPDATED.docx"
+EXCEL_PATH = str(BASE_DIR / "input" / "Automation data.xlsx")
+TEMPLATE_PATH = str(BASE_DIR / "templates" / "SCR_TEMPLATE_UPDATED.docx")
+DUTIES_PATH = str(BASE_DIR / "reference" / "Duties Per Unit.xlsx")
 
-OUTPUT_PATH = r"C:\Users\prajw\OneDrive\Documents\Projects\scr_automation\output\SCR_TEMPLATE_FILLED_STEP1.docx"
+OUTPUT_DIR = BASE_DIR / "output"
+SUPPORT_OUTPUT_DIR = BASE_DIR / "output" / "support_session_scrs"
 
-DUTIES_PATH = r"C:\Users\prajw\OneDrive\Documents\Projects\scr_automation\reference\Duties Per Unit.xlsx"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+SUPPORT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # =========================
 # XML NAMESPACE
@@ -75,6 +77,7 @@ def make_run(text, font_name="Calibri", font_size=10, bold=False):
 
     return r
 
+
 def set_sdt_text(sdt, value, font_name="Calibri", font_size=10):
     """
     Fill a content control (dropdown/plain text/date-like control) with visible text.
@@ -98,6 +101,7 @@ def set_sdt_text(sdt, value, font_name="Calibri", font_size=10):
     p.append(make_run(value, font_name=font_name, font_size=font_size, bold=False))
     return True
 
+
 def set_text_or_first_sdt_in_cell(tc, value, font_name="Calibri", font_size=10):
     """
     If the cell contains an SDT/dropdown, fill that.
@@ -108,6 +112,7 @@ def set_text_or_first_sdt_in_cell(tc, value, font_name="Calibri", font_size=10):
         return set_sdt_text(sdts[0], value, font_name=font_name, font_size=font_size)
 
     return set_any_text_in_cell(tc, value, font_name=font_name, font_size=font_size)
+
 
 def set_cell_text(tc, value, font_name="Calibri", font_size=10):
     paragraphs = tc.xpath("./w:p", namespaces=NS)
@@ -205,11 +210,12 @@ def set_any_text_in_cell(tc, value, font_name="Calibri", font_size=10):
     p.append(make_run(value, font_name=font_name, font_size=font_size, bold=False))
     return True
 
+
 def tick_checkbox_sdt(sdt):
     """
     Tick a Word checkbox content control by updating:
     1) w14:checked = 1
-    2) visible symbol in w:sdtContent to ☒
+    2) visible symbol in w:sdtContent to ☑
     """
     checked = sdt.find(".//{%s}checked" % W14_NS)
     if checked is not None:
@@ -249,7 +255,6 @@ def tick_required_scr_checkboxes(tables, data):
     - End Time exists
     - Location exists
     """
-
     if not data.get("finish_time") or not data.get("location"):
         print("Skipping checkbox tick (missing End Time or Location).")
         return
@@ -272,6 +277,7 @@ def tick_required_scr_checkboxes(tables, data):
 
     print("Learning and/or Assessment ticked:", ok1)
     print("Trade Training Centre ticked:", ok2)
+
 
 def get_table_rows(tbl):
     return tbl.xpath("./w:tr", namespaces=NS)
@@ -361,16 +367,102 @@ def format_time_value(value):
 
     return text
 
+
 def safe_str(value):
     if pd.isna(value):
         return ""
     return str(value).strip()
 
+
 def format_output_date(value):
-    dt = pd.to_datetime(value, dayfirst=True, errors="coerce")
+    dt = parse_contact_date(value)
     if pd.isna(dt):
         return ""
     return dt.strftime("%d.%m.%Y")
+
+
+def parse_contact_date(value):
+    """
+    Parse Date of Contact safely for Australian dd/mm/yyyy style.
+    Returns pandas Timestamp or NaT.
+    """
+    if pd.isna(value) or str(value).strip() == "":
+        return pd.NaT
+
+    if isinstance(value, pd.Timestamp):
+        return value
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        dt = pd.to_datetime(value, unit="D", origin="1899-12-30", errors="coerce")
+        if pd.notna(dt):
+            return dt
+        return pd.NaT
+
+    text = str(value).strip()
+
+    # Try explicit day-first formats first
+    possible_formats = [
+        "%d/%m/%Y",
+        "%d-%m-%Y",
+        "%d.%m.%Y",
+        "%d/%m/%y",
+        "%d-%m-%y",
+        "%Y-%m-%d",
+    ]
+
+    for fmt in possible_formats:
+        try:
+            return pd.to_datetime(text, format=fmt, errors="raise")
+        except Exception:
+            pass
+
+    # Final fallback: still treat as day-first
+    return pd.to_datetime(text, dayfirst=True, errors="coerce")
+
+
+def calculate_total_hours(start_value, finish_value):
+    """
+    Returns duration as decimal hours string, e.g. 2.5, 1.0, 3.25
+    """
+    if pd.isna(start_value) or pd.isna(finish_value):
+        return ""
+
+    def parse_excel_time(val):
+        if isinstance(val, pd.Timestamp):
+            return val
+
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            dt = pd.to_datetime(val, unit="D", origin="1899-12-30", errors="coerce")
+            if pd.notna(dt):
+                return dt
+
+        dt = pd.to_datetime(val, errors="coerce")
+        if pd.notna(dt):
+            return dt
+
+        text = str(val).strip()
+        for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M%p"):
+            try:
+                return pd.to_datetime(text, format=fmt, errors="raise")
+            except Exception:
+                pass
+
+        return pd.NaT
+
+    start_dt = parse_excel_time(start_value)
+    finish_dt = parse_excel_time(finish_value)
+
+    if pd.isna(start_dt) or pd.isna(finish_dt):
+        return ""
+
+    if finish_dt < start_dt:
+        finish_dt = finish_dt + pd.Timedelta(days=1)
+
+    total_seconds = (finish_dt - start_dt).total_seconds()
+    total_hours = total_seconds / 3600
+
+    return f"{total_hours:.2f}".rstrip("0").rstrip(".")
+
 
 def build_data_from_row(row):
     student_surname = safe_str(row["Student Surname"])
@@ -388,14 +480,21 @@ def build_data_from_row(row):
     trainer_name = f"{trainer_given_name} {trainer_surname}".strip()
     trainer_name_display = f"{trainer_given_name} {trainer_surname}".strip()
 
-    date_of_contact_doc = pd.to_datetime(
-        row["Date of Contact"], dayfirst=True, errors="coerce"
-    ).strftime("%d/%m/%Y")
+    contact_dt = parse_contact_date(row["Date of Contact"])
 
-    date_of_contact_file = format_output_date(row["Date of Contact"])
+    date_of_contact_doc = ""
+    date_of_contact_file = ""
+
+    if pd.notna(contact_dt):
+        date_of_contact_doc = contact_dt.strftime("%d/%m/%Y")
+        date_of_contact_file = contact_dt.strftime("%d.%m.%Y")
 
     start_time_raw = row["Start Time"] if "Start Time" in row.index else ""
-    finish_time_raw = row["End Time"] if "End Time" in row.index else row["Finish Time"] if "Finish Time" in row.index else ""
+    finish_time_raw = (
+        row["End Time"] if "End Time" in row.index
+        else row["Finish Time"] if "Finish Time" in row.index
+        else ""
+    )
 
     start_time = format_time_value(start_time_raw)
     finish_time = format_time_value(finish_time_raw)
@@ -427,11 +526,13 @@ def build_data_from_row(row):
 
     return data
 
+
 def sanitize_filename(name):
     invalid_chars = r'<>:"/\|?*'
     for ch in invalid_chars:
         name = name.replace(ch, "")
     return " ".join(name.split()).strip()
+
 
 def build_output_filename(data):
     filename = (
@@ -441,6 +542,7 @@ def build_output_filename(data):
         f'{data["trainer_name_display"]}.docx'
     )
     return sanitize_filename(filename)
+
 
 def fill_first_top_section(tables, data):
     tbl = tables[0]
@@ -528,50 +630,7 @@ def fill_site_visit_section(tables, data):
                 if data["finish_time"]:
                     set_cell_text(cells[3], data["finish_time"])
             break
-def calculate_total_hours(start_value, finish_value):
-    """
-    Returns duration as decimal hours string, e.g. 2.5, 1.0, 3.25
-    """
-    if pd.isna(start_value) or pd.isna(finish_value):
-        return ""
 
-    def parse_excel_time(val):
-        if isinstance(val, pd.Timestamp):
-            return val
-
-        if isinstance(val, (int, float)) and not isinstance(val, bool):
-            dt = pd.to_datetime(val, unit="D", origin="1899-12-30", errors="coerce")
-            if pd.notna(dt):
-                return dt
-
-        dt = pd.to_datetime(val, errors="coerce")
-        if pd.notna(dt):
-            return dt
-
-        text = str(val).strip()
-        for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M%p"):
-            try:
-                return pd.to_datetime(text, format=fmt, errors="raise")
-            except Exception:
-                pass
-
-        return pd.NaT
-
-    start_dt = parse_excel_time(start_value)
-    finish_dt = parse_excel_time(finish_value)
-
-    if pd.isna(start_dt) or pd.isna(finish_dt):
-        return ""
-
-    # handle overnight case if ever needed
-    if finish_dt < start_dt:
-        finish_dt = finish_dt + pd.Timedelta(days=1)
-
-    total_seconds = (finish_dt - start_dt).total_seconds()
-    total_hours = total_seconds / 3600
-
-    # remove trailing zeros nicely
-    return f"{total_hours:.2f}".rstrip("0").rstrip(".")
 
 def fill_start_end_total_hours_section(tables, data):
     tbl = find_table_by_labels(
@@ -630,7 +689,7 @@ def fill_attendance_section_strict(tables, data):
 
             if len(cells) >= 5:
                 set_any_text_in_cell(cells[0], data["student_name"])
-                set_any_text_in_cell(cells[2], data["start_time"])   # Time In = Start Time
+                set_any_text_in_cell(cells[2], data["start_time"])
                 if data["finish_time"]:
                     set_any_text_in_cell(cells[3], data["finish_time"])
                 print("Attendance section filled.")
@@ -664,6 +723,7 @@ def clear_trainer_endorsement_datetime(tables):
             elif len(cells) >= 2:
                 set_any_text_in_cell(cells[1], "")
             break
+
 
 def fill_subjects_section(tables, data, duties_df):
     codes = data["commenced_codes"]
@@ -729,6 +789,7 @@ def fill_subjects_section(tables, data, duties_df):
 
     print("Main subjects table filled successfully.")
 
+
 def fill_active_subjects_in_site_visit_table(tables, data, duties_df):
     codes = data["commenced_codes"]
 
@@ -739,7 +800,6 @@ def fill_active_subjects_in_site_visit_table(tables, data, duties_df):
     target_tbl = None
     for i, tbl in enumerate(tables):
         txt = normalize_text(get_text(tbl))
-
         print("Checking table:", txt[:200])
 
         if "actively engaged in training" in txt and "subject" in txt:
@@ -790,72 +850,141 @@ def fill_active_subjects_in_site_visit_table(tables, data, duties_df):
             continue
 
         merged_text = f"{code} - {unit_name}".strip()
-
-        # ✅ FIXED: write to FIRST cell
         set_cell_text(cells[0], merged_text)
 
         print(f"✅ Filled row {write_row}: {merged_text}")
-
         write_row += 1
 
     print("✅ Active subjects section filled successfully.")
 
-def fill_routine_work_duties_section(root, data, duties_df):
-    codes = data["commenced_codes"]
 
-    if not codes:
-        print("Commenced column is empty.")
+def fill_routine_work_duties_section(tables, data, duties_df):
+    """
+    Fill Routine Work Duties section using fixed row positions:
+    - first rows get duty text
+    - remaining rows get this section's own dropdown
+    - source dropdown is the LAST visible 'Choose an item' row before 'Terms and Conditions'
+    """
+    target_tbl = None
+    for tbl in tables:
+        txt = normalize_text(get_text(tbl))
+        if (
+            "site visit attendance and engagement record" in txt
+            and "routine work duties engagement" in txt
+            and "terms and conditions" in txt
+        ):
+            target_tbl = tbl
+            break
+
+    if target_tbl is None:
+        print("Routine Work Duties table not found.")
         return
 
-    duty_texts = []
-    for code in codes:
-        match = duties_df[duties_df["Serial No"].astype(str).str.strip() == code]
-        if not match.empty and "Duties" in match.columns:
-            duty_text = str(match.iloc[0]["Duties"]).strip()
-            if duty_text:
-                duty_texts.append(duty_text)
-
-    if not duty_texts:
-        print("No duties found to write.")
-        return
-
-    paragraphs = root.xpath(".//w:p", namespaces=NS)
+    rows = get_table_rows(target_tbl)
 
     heading_idx = None
-    for i, p in enumerate(paragraphs):
-        p_text = normalize_text(get_text(p))
-        if "routine work duties engagement" in p_text and "minimum of 1 must be chosen" in p_text:
+    terms_idx = None
+
+    for i, row in enumerate(rows):
+        row_text = normalize_text(get_text(row))
+
+        if (
+            heading_idx is None
+            and "routine work duties engagement" in row_text
+            and "minimum of 1 must be chosen" in row_text
+        ):
             heading_idx = i
-            print("Routine Work Duties heading paragraph found at index:", i)
+            continue
+
+        if heading_idx is not None and "terms and conditions" in row_text:
+            terms_idx = i
             break
 
     if heading_idx is None:
         print("Routine Work Duties heading not found.")
         return
 
-    write_count = 0
-    for p in paragraphs[heading_idx + 1:]:
-        p_text = normalize_text(get_text(p))
+    if terms_idx is None:
+        print("Terms and Conditions row not found.")
+        return
 
-        if "terms and conditions" in p_text:
+    source_row_idx = None
+    source_sdt = None
+
+    for i in range(terms_idx - 1, heading_idx, -1):
+        row = rows[i]
+        row_text = normalize_text(get_text(row))
+        sdts = row.xpath(".//w:sdt", namespaces=NS)
+
+        if sdts and "choose an item" in row_text:
+            source_row_idx = i
+            source_sdt = sdts[0]
             break
 
-        if p_text == "":
-            clear_paragraph(p)
+    if source_row_idx is None or source_sdt is None:
+        print("Routine Work Duties source dropdown not found.")
+        return
 
-            pPr = p.find("w:pPr", namespaces=NS)
-            if pPr is None:
-                pPr = etree.Element(qn("w:pPr"))
-                p.insert(0, pPr)
+    candidate_row_indices = list(range(heading_idx + 1, source_row_idx))
 
-            p.append(make_run(duty_texts[write_count], font_name="Calibri", font_size=10, bold=False))
-            print(f"Filled routine duty paragraph {write_count + 1}: {duty_texts[write_count]}")
-            write_count += 1
+    print("Routine Work heading row:", heading_idx)
+    print("Routine Work source row:", source_row_idx)
+    print("Routine Work terms row:", terms_idx)
+    print("Routine Work candidate rows:", candidate_row_indices)
+    print("Commenced codes:", data.get("commenced_codes"))
 
-            if write_count >= len(duty_texts):
-                break
+    duty_texts = []
+    commenced_codes = data.get("commenced_codes", [])
+
+    duties_df_copy = duties_df.copy()
+    duties_df_copy["Serial No_clean"] = duties_df_copy["Serial No"].astype(str).str.strip().str.upper()
+
+    for code in commenced_codes:
+        code_clean = str(code).strip().upper()
+        match = duties_df_copy[duties_df_copy["Serial No_clean"] == code_clean]
+
+        if not match.empty and "Duties" in match.columns:
+            duty_text = str(match.iloc[0]["Duties"]).strip()
+            if duty_text:
+                duty_texts.append(duty_text)
+
+    print("Duty texts found:", duty_texts)
+
+    rows_for_text = candidate_row_indices[:len(duty_texts)]
+    for row_idx, duty_text in zip(rows_for_text, duty_texts):
+        row = rows[row_idx]
+        cells = get_row_cells(row)
+        if not cells:
+            continue
+
+        target_cell = cells[0]
+
+        for child in list(target_cell):
+            if child.tag != qn("w:tcPr"):
+                target_cell.remove(child)
+
+        set_cell_text(target_cell, duty_text)
+        print(f"Filled routine duty row {row_idx}: {duty_text}")
+
+    rows_for_dropdown = candidate_row_indices[len(duty_texts):]
+    for row_idx in rows_for_dropdown:
+        row = rows[row_idx]
+        cells = get_row_cells(row)
+        if not cells:
+            continue
+
+        target_cell = cells[0]
+
+        for child in list(target_cell):
+            if child.tag != qn("w:tcPr"):
+                target_cell.remove(child)
+
+        cloned_sdt = deepcopy(source_sdt)
+        target_cell.append(cloned_sdt)
+        print(f"Added dropdown to row {row_idx}")
 
     print("Routine Work Duties section filled successfully.")
+
 
 def remove_empty_paragraph_runs(root):
     """
@@ -879,10 +1008,193 @@ def remove_empty_paragraph_runs(root):
                 except Exception:
                     pass
 
-def fill_scr_template():
+
+def clone_subject_dropdowns_into_empty_rows(tables):
+    """
+    Clone the existing dropdown into visually empty rows of the top subjects table
+    without breaking Word table structure.
+    """
+    target_tbl = None
+    for tbl in tables:
+        txt = normalize_text(get_text(tbl))
+        if (
+            "subject code" in txt
+            and "subject name" in txt
+            and "continued" in txt
+            and "completed" in txt
+            and "trade training centre" in txt
+        ):
+            target_tbl = tbl
+            break
+
+    if target_tbl is None:
+        print("Subjects table not found.")
+        return
+
+    rows = get_table_rows(target_tbl)
+
+    source_sdt = None
+    source_row_index = None
+
+    for r_idx, row in enumerate(rows):
+        row_text = normalize_text(get_text(row))
+        sdts = row.xpath(".//w:sdt", namespaces=NS)
+
+        if sdts and "choose an item" in row_text:
+            source_sdt = sdts[0]
+            source_row_index = r_idx
+            break
+
+    if source_sdt is None:
+        print("Dropdown source not found.")
+        return
+
+    print(f"Dropdown source found in row {source_row_index}")
+
+    for r_idx in range(1, source_row_index):
+        row = rows[r_idx]
+        cells = get_row_cells(row)
+
+        if not cells:
+            continue
+
+        target_cell = cells[0]
+
+        if target_cell.xpath(".//w:sdt", namespaces=NS):
+            continue
+
+        texts = target_cell.xpath(".//w:t/text()", namespaces=NS)
+        visible_text = "".join(t.strip() for t in texts)
+
+        if visible_text != "":
+            continue
+
+        for child in list(target_cell):
+            if child.tag != qn("w:tcPr"):
+                target_cell.remove(child)
+
+        cloned_sdt = deepcopy(source_sdt)
+        target_cell.append(cloned_sdt)
+
+        print(f"Dropdown added to row {r_idx}")
+
+    print("Dropdown cloning completed.")
+
+
+def clone_site_visit_dropdowns_into_empty_rows(tables):
+    """
+    Copy the exact template dropdown row structure for empty rows in the
+    Site Visit subject section.
+
+    This fixes spacing/formatting issues by cloning the whole row, not just the SDT.
+    """
+    target_tbl = None
+
+    for tbl in tables:
+        txt = normalize_text(get_text(tbl))
+        if (
+            "site visit attendance and engagement record" in txt
+            and "subject(s) actively engaged in training" in txt
+            and "routine work duties engagement" in txt
+        ):
+            target_tbl = tbl
+            break
+
+    if target_tbl is None:
+        print("Site Visit table not found.")
+        return
+
+    rows = get_table_rows(target_tbl)
+
+    subject_heading_idx = None
+    routine_heading_idx = None
+
+    for i, row in enumerate(rows):
+        row_text = normalize_text(get_text(row))
+
+        if (
+            subject_heading_idx is None
+            and "subject(s) actively engaged in training" in row_text
+        ):
+            subject_heading_idx = i
+            continue
+
+        if (
+            subject_heading_idx is not None
+            and "routine work duties engagement" in row_text
+        ):
+            routine_heading_idx = i
+            break
+
+    if subject_heading_idx is None:
+        print("Subject section heading not found.")
+        return
+
+    if routine_heading_idx is None:
+        print("Routine Work Duties heading not found.")
+        return
+
+    # ---------------------------------------------------------
+    # Find the correct source row inside the subject section
+    # ---------------------------------------------------------
+    source_row_idx = None
+    source_row = None
+
+    for i in range(subject_heading_idx + 1, routine_heading_idx):
+        row = rows[i]
+        row_text = normalize_text(get_text(row))
+
+        if "choose an item" in row_text:
+            sdts = row.xpath(".//w:sdt", namespaces=NS)
+            if sdts:
+                source_row_idx = i
+                source_row = row
+                break
+
+    if source_row is None:
+        print("Subject dropdown source row not found.")
+        return
+
+    print(f"Subject heading row: {subject_heading_idx}")
+    print(f"Routine heading row: {routine_heading_idx}")
+    print(f"Source dropdown row: {source_row_idx}")
+
+    # ---------------------------------------------------------
+    # Replace every empty/placeholder row with a clone of the
+    # exact source row so formatting matches the template
+    # ---------------------------------------------------------
+    rows_to_replace = []
+
+    for i in range(subject_heading_idx + 1, routine_heading_idx):
+        if i == source_row_idx:
+            continue
+
+        row = rows[i]
+        row_text = normalize_text(get_text(row))
+
+        # Keep rows that already have real subject text
+        if row_text != "" and "choose an item" not in row_text:
+            continue
+
+        rows_to_replace.append(row)
+
+    replaced_count = 0
+
+    for row in rows_to_replace:
+        parent = row.getparent()
+        insert_at = parent.index(row)
+        new_row = deepcopy(source_row)
+        parent.remove(row)
+        parent.insert(insert_at, new_row)
+        replaced_count += 1
+
+    print(f"✅ Site Visit dropdown rows replaced with template clones: {replaced_count}")
+
+
+def fill_scr_template(is_support_session=False):
     df = pd.read_excel(EXCEL_PATH)
     duties_df = pd.read_excel(DUTIES_PATH)
-    # ✅ CLEAN UNIT NAME (REMOVE DUPLICATE CODE)
+
     duties_df["Unit Name"] = duties_df.apply(
         lambda x: str(x["Unit Name"]).split(str(x["Serial No"]))[-1].lstrip(" -"),
         axis=1
@@ -891,11 +1203,8 @@ def fill_scr_template():
     if df.empty:
         raise ValueError("Automation data.xlsx is empty.")
 
-    output_dir = os.path.dirname(OUTPUT_PATH)
-    if not output_dir:
-        output_dir = os.getcwd()
-
-    os.makedirs(output_dir, exist_ok=True)
+    output_dir = SUPPORT_OUTPUT_DIR if is_support_session else OUTPUT_DIR
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     for idx, row in df.iterrows():
         print("=" * 80)
@@ -903,8 +1212,12 @@ def fill_scr_template():
 
         data = build_data_from_row(row)
         output_filename = build_output_filename(data)
-        record_output_path = os.path.join(output_dir, output_filename)
 
+        trainer_folder_name = sanitize_filename(data["trainer_name_display"]) or "Unknown Trainer"
+        trainer_output_dir = output_dir / trainer_folder_name
+        trainer_output_dir.mkdir(parents=True, exist_ok=True)
+
+        record_output_path = trainer_output_dir / output_filename
         temp_dir = tempfile.mkdtemp()
 
         try:
@@ -930,9 +1243,11 @@ def fill_scr_template():
             fill_attendance_section_strict(tables, data)
             clear_trainer_endorsement_datetime(tables)
             fill_subjects_section(tables, data, duties_df)
+            clone_subject_dropdowns_into_empty_rows(tables)
             tick_required_scr_checkboxes(tables, data)
             fill_active_subjects_in_site_visit_table(tables, data, duties_df)
-            fill_routine_work_duties_section(root, data, duties_df)
+            clone_site_visit_dropdowns_into_empty_rows(tables)
+            fill_routine_work_duties_section(tables, data, duties_df)
             remove_empty_paragraph_runs(root)
 
             tree.write(
@@ -942,7 +1257,7 @@ def fill_scr_template():
                 standalone="yes"
             )
 
-            with zipfile.ZipFile(record_output_path, "w", zipfile.ZIP_DEFLATED) as out_zip:
+            with zipfile.ZipFile(str(record_output_path), "w", zipfile.ZIP_DEFLATED) as out_zip:
                 for foldername, _, filenames in os.walk(temp_dir):
                     for filename in filenames:
                         file_path = os.path.join(foldername, filename)
@@ -957,7 +1272,8 @@ def fill_scr_template():
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-def run_scr_automation(excel_path=None):
+
+def run_scr_automation(excel_path=None, is_support_session=False):
     global EXCEL_PATH
 
     original_excel_path = EXCEL_PATH
@@ -966,10 +1282,11 @@ def run_scr_automation(excel_path=None):
         EXCEL_PATH = str(excel_path)
 
     try:
-        fill_scr_template()
+        fill_scr_template(is_support_session=is_support_session)
     finally:
         EXCEL_PATH = original_excel_path
 
 
 if __name__ == "__main__":
     run_scr_automation()
+

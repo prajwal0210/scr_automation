@@ -1,34 +1,34 @@
-# =========================
-# Generated / runtime data
-# =========================
-output/*
-logs/*
-ran_already/*
+# Python cache
+__pycache__/
+*.pyc
 
-# =========================
-# Raw / sensitive data
-# =========================
-input/*
-raw_files/*
-reference/*
+# Virtual environment
+scr_automation_env/
+.venv/
+venv/
+env/
 
-# =========================
-# 🔥 IMPORTANT FIX
-# Allow folders first
-# =========================
-!output/
-!logs/
-!ran_already/
-!input/
-!raw_files/
+# Logs
+logs/
+*.log
+
+# Output/generated files
+output/
+processing/
+ran_already/
+
+# Raw/input files - do not upload sensitive data
+raw_files/
+support_session_raw/
+input/
+
+# Keep these folders uploaded
 !reference/
+!reference/**
 
-# =========================
-# Then allow .gitkeep
-# =========================
-!output/.gitkeep
-!logs/.gitkeep
-!ran_already/.gitkeep
-!input/.gitkeep
-!raw_files/.gitkeep
-!reference/.gitkeep
+!templates/
+!templates/**
+
+# Optional system files
+.DS_Store
+Thumbs.db
